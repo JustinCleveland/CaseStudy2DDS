@@ -1,0 +1,384 @@
+---
+title: "Case Study 2"
+author: "Justin Cleveland"
+date: "4/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Introduction  
+Code below was developed to analyze employee data for the purpose of predicting employee turnover. The R code goes through a series of step to import raw data, transform, visualize, and develop prediction based models. The primary goal is to identify factors that lead to employee attrition, however there is additional code developed to predict an employee's monthly income. 
+  
+You should identify the top three factors that contribute to turnover (backed up by evidence provided by analysis). There may or may not be a need to create derived attributes/variables/features.
+  
+Inaddition The business is also interested in learning about any job role specific trends that may exist in the data set (e.g., “Data Scientists have the highest job satisfaction”). You can also provide any other interesting trends and observations from your analysis. 
+  
+Classification Model to predict attriton (Plus top three factors, and at least 60% sensitivity and specificity (60 each = 120 total))
+Prediction Model of Monthly incomes (Lowest RMSE model)
+Jobe role trends
+  
+  
+### Load required R Libraries
+```{r,message=FALSE,warning=FALSE}
+library(tidyverse) #Loads core packages including:
+#ggplot2, for data visualisation
+#dplyr, for data manipulation
+#tidyr, for data tidying
+#readr, for data import
+#purrr, for functional programming
+#tibble, for tibbles, a modern re-imagining of data frames
+#stringr, for strings
+#forcats, for factors
+library(GGally) #Used to plot relationship of variables in MLR model
+library(ggfortify) #Used to plot MLR residuals and Q-Q plot
+library(Metrics) #Used to calculate mse 
+library(gridExtra) #Used to a more complex graphics to ggplot, grid.arrange function
+library(Hmisc) #Used to build correlation matrix table
+library(plyr) #Used for data analysis and tidy data
+library(caret) #Used to split data into training and testing
+library(e1071) #Used for naiveBayes model
+library(RCurl) #Used to read data using GetURL fuction
+library(corrplot) #Used to build correlation matrix
+```
+
+### Import Data 
+Code below will read data into R from Github
+```{r}
+# Read in data for analysis
+Data = read.csv(text=getURL("https://raw.githubusercontent.com/JustinCleveland/CaseStudy2DDS/master/CaseStudy2-data.csv"), header = TRUE,   na.strings =c('', 'NA'))
+Dataset = Data
+Validation_Attrition = read.csv("https://raw.githubusercontent.com/JustinCleveland/CaseStudy2DDS/master/CaseStudy2CompSet No Attrition.csv",header = TRUE,na.strings=c("","NA"))
+Validation_Salary = read.csv("https://raw.githubusercontent.com/JustinCleveland/CaseStudy2DDS/master/CaseStudy2CompSet No Salary.csv",header = TRUE,na.strings=c("","NA"))
+
+```
+
+### Transform Data
+#### Change factor variables to ordinal variables
+
+```{r}
+#Attrition
+Dataset$Att <-            ifelse(grepl("*No*",Dataset$Attrition) , "0", "1")
+                          Dataset$Att = as.integer(Dataset$Att)
+
+#Gender
+Dataset$Gender <-         ifelse(grepl("*Female*",Dataset$Gender) , "0", "1")
+                          Dataset$Gender = as.integer(Dataset$Gender)
+
+#Overtime
+Dataset$OverTime <-       ifelse(grepl("*No*",Dataset$OverTime) , "0", "1")
+                          Dataset$OverTime = as.integer(Dataset$OverTime)
+
+#BusinessTravel                                              
+Dataset$BusinessTravel <- ifelse(grepl("*Non-Travel*", Dataset$BusinessTravel), "0", 
+                          ifelse(grepl("*Travel_Frequently*", Dataset$BusinessTravel) , "1", "2"))
+                          Dataset$BusinessTravel = as.integer(Dataset$BusinessTravel)
+
+#Department
+Dataset$Department <-     ifelse(grepl("*Human Resources*", Dataset$Department ), "0", 
+                          ifelse(grepl("*Research & Development*", Dataset$Department) , "1", "2"))
+                          Dataset$Department = as.integer(Dataset$Department )
+
+#MaritalStatus
+Dataset$MaritalStatus <-  ifelse(grepl("*Divorced*", Dataset$MaritalStatus), "0", 
+                          ifelse(grepl("*Married*", Dataset$MaritalStatus) , "1", "2"))
+                          Dataset$MaritalStatus = as.integer(Dataset$MaritalStatus)
+
+#EducationField
+Dataset$EducationField <- ifelse(grepl("*Human Resources*", Dataset$EducationField), "0", 
+                          ifelse(grepl("*Life Sciences*", Dataset$EducationField) , "1", 
+                          ifelse(grepl("*Marketing*", Dataset$EducationField) , "2", 
+                          ifelse(grepl("*Medical*", Dataset$EducationField) , "3", 
+                          ifelse(grepl("*Other*", Dataset$EducationField) , "4", 
+                                 "5")))))
+                          Dataset$EducationField = as.integer(Dataset$Department)
+
+#JobRole
+Dataset$JobRole <-        ifelse(grepl("*Healthcare Representative*", Dataset$JobRole), "0", 
+                          ifelse(grepl("*Human Resources*", Dataset$JobRole) , "1", 
+                          ifelse(grepl("*Laboratory Technician*", Dataset$JobRole) , "2", 
+                          ifelse(grepl("*Manager*", Dataset$JobRole) , "3", 
+                          ifelse(grepl("*Manufacturing Director*", Dataset$JobRole) , "4", 
+                          ifelse(grepl("*Research Director*", Dataset$JobRole) , "5", 
+                          ifelse(grepl("*Research Scientist*", Dataset$JobRole) , "6", 
+                          ifelse(grepl("*Sales Executive*", Dataset$JobRole) , "7", 
+                          "8"))))))))
+                          Dataset$JobRole = as.integer(Dataset$JobRole)
+```
+
+#### Create Table with variables that have more than one level  
+  
+Excludes variables: EmployeeCount,EmployeeNumber, Over18, StandardHours
+
+```{r}
+
+Dataset = Dataset %>% select(ID,Attrition,Att,Age,BusinessTravel,DailyRate,Department,DistanceFromHome,Education,EducationField,EnvironmentSatisfaction,Gender,HourlyRate,JobInvolvement,JobLevel,JobRole,JobSatisfaction,MaritalStatus,MonthlyIncome,MonthlyRate,NumCompaniesWorked,OverTime,PercentSalaryHike,PerformanceRating,RelationshipSatisfaction,StockOptionLevel,TotalWorkingYears,TrainingTimesLastYear,WorkLifeBalance,YearsAtCompany,YearsInCurrentRole,YearsSinceLastPromotion,YearsWithCurrManager)
+
+```
+
+#### Create Test Dataset and Training Dataset using transformed variables 
+
+```{r,message=FALSE}
+set.seed(4)
+Dataset_Index = sample(seq(1:length(Dataset$ID)),round(.7*length(Dataset$ID)))
+Dataset_Train = Dataset[Dataset_Index,]
+Dataset_Test = Dataset[-Dataset_Index,]
+```
+
+### Visualize  
+
+
+```{r,message=FALSE}
+#Bar Plot of Employee Attrition
+Data %>% 
+  ggplot(aes(x=Attrition)) +  
+  geom_bar() + 
+  ggtitle("Count of Employee Attrition") + xlab("Attrition") + ylab("Count") 
+
+#Group TotalWorking Years and Monthly Income into buckets
+Data <- Data %>% mutate(TotWorkingYears=cut(TotalWorkingYears, breaks=c(-Inf, 6, 11, 16,21,31,Inf), labels=c(">5","6-10","11-15","16-20","21-30","<30")))
+Data <- Data %>% mutate(MoIncome=cut(MonthlyIncome, breaks=c(-Inf, 5000, 10000, 15000,Inf), labels=c(">$5k","$5K-$10K","$11K-$15k","<$16k")))
+
+
+Data %>% select(Attrition,MonthlyIncome) %>%
+  ggplot(aes(x=Attrition,y=MonthlyIncome,fill=Attrition)) +  
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(aes(fill=Attrition) ,position=position_jitterdodge(jitter.width = .1)) +
+  ggtitle("Attrition by MonthlyIncome") + xlab("Attrition") + ylab("MonthlyIncome")
+
+
+OT = Data %>% select(Attrition,MonthlyIncome,OverTime) %>%
+  ggplot(aes(x=OverTime,y=MonthlyIncome,fill=Attrition)) +  
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(aes(fill=Attrition) ,position=position_jitterdodge(jitter.width = .1)) +
+  ggtitle("Attrition by MonthlyIncome and OverTime") + xlab("OverTime") + ylab("MonthlyIncome") 
+
+TW = Data %>% select(Attrition,MonthlyIncome,TotWorkingYears) %>%
+  ggplot(aes(x=TotWorkingYears,y=MonthlyIncome,fill=Attrition)) +  
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(aes(fill=Attrition) ,position=position_jitterdodge(jitter.width = .1)) +
+  ggtitle("Attrition by MonthlyIncome and TotalWorkingYears") + xlab("Total Working Years") + ylab("MonthlyIncome") 
+
+grid.arrange(OT, TW, ncol=2)
+
+```
+
+
+#### Identify variables that are correlatted
+Custom function to format the correlation matrix to help identify variables correlatted with attrition  
+Source for custom function code: https://rstudio-pubs-static.s3.amazonaws.com/240657_5157ff98e8204c358b2118fa69162e18.html
+
+```{r,message=FALSE}
+#Custom function to create table of correlated variables
+flat_cor_mat <- function(cor_r, cor_p){
+  #This function provides a simple formatting of a correlation matrix
+  #into a table with 4 columns containing :
+    # Column 1 : row names (variable 1 for the correlation test)
+    # Column 2 : column names (variable 2 for the correlation test)
+    # Column 3 : the correlation coefficients
+    # Column 4 : the p-values of the correlations
+  cor_r <- rownames_to_column(as.data.frame(cor_r), var = "row")
+  cor_r <- gather(cor_r, column, cor, -1)
+  cor_p <- rownames_to_column(as.data.frame(cor_p), var = "row")
+  cor_p <- gather(cor_p, column, p, -1)
+  cor_p_matrix <- left_join(cor_r, cor_p, by = c("row", "column"))
+  cor_p_matrix
+}
+
+#Create plot of variables
+corrplot(cor(Dataset[,c(3:33)]), method = "ellipse")
+
+#Create table showing the correlation coeffient with attrition
+CorrMatrix <- rcorr(as.matrix(Dataset[,c(3:33)]))
+CorrTable = flat_cor_mat(round(CorrMatrix$r,3), round(CorrMatrix$P,3))
+CorrTable  %>% 
+  arrange(p) %>%
+  filter(column=='Att') %>%
+  select(row,cor,p)
+
+```
+
+### Model 
+
+#### Create Naïve Bayes Classification Model to predict employee attrition
+
+```{r,message=FALSE}
+# Use original data including factors and numerical data
+NB_Dataset = Data %>% select(ID,Attrition,Age,BusinessTravel,DailyRate,Department,DistanceFromHome,Education,EducationField,EnvironmentSatisfaction,Gender,HourlyRate,JobInvolvement,JobLevel,JobRole,JobSatisfaction,MaritalStatus,MonthlyIncome,MonthlyRate,NumCompaniesWorked,OverTime,PercentSalaryHike,PerformanceRating,RelationshipSatisfaction,StockOptionLevel,TotalWorkingYears,TrainingTimesLastYear,WorkLifeBalance,YearsAtCompany,YearsInCurrentRole,YearsSinceLastPromotion,YearsWithCurrManager)
+#str(NB_Dataset)
+
+# Create NB Model Test and Training Datasets
+NB_Dataset_Index = sample(seq(1:length(NB_Dataset$ID)),round(.7*length(NB_Dataset$ID)))
+NB_Dataset_Train = NB_Dataset[NB_Dataset_Index,]
+NB_Dataset_Test = NB_Dataset[-NB_Dataset_Index,]
+
+NB_Attrition_Model = naiveBayes(NB_Dataset_Train[,c(3:32)],as.factor(NB_Dataset_Train$Attrition),laplace = 1)
+confusionMatrix(table(predict(NB_Attrition_Model,NB_Dataset_Test[,c(3:32)]),as.factor(NB_Dataset_Test$Attrition)))
+```
+
+
+#### Second pass NB model
+Build model with highly correlated variables with attrition
+
+```{r,message=FALSE, warning=FALSE}
+#Final variables selected for NB model which are based on the lowest pvalue in the correlation table 
+NB_Dataset_2 = Dataset %>% select(ID,Att,Attrition,JobInvolvement, JobLevel, MaritalStatus, OverTime, TotalWorkingYears, MonthlyIncome, YearsInCurrentRole)
+str(NB_Dataset_2)
+
+#Create table of variables correlated with attrition
+CM_Dataset = NB_Dataset_2
+CorrMatrix <- rcorr(as.matrix(CM_Dataset[,c(2,4:10)]))
+CorrTable <- flat_cor_mat(round(CorrMatrix$r,4), round(CorrMatrix$P,06))
+CorrTable[CorrTable$column=='Att',]
+
+#Create plot of variables correlated with attrition
+corrplot(cor(CM_Dataset[,c(2,4:10)]), method = "ellipse")
+
+set.seed(6)
+NB_Dataset_Index_2 = sample(seq(1:length(NB_Dataset_2$ID)),round(.7*length(NB_Dataset_2$ID)))
+NB_Dataset_Train_2 = NB_Dataset_2[NB_Dataset_Index_2,]
+NB_Dataset_Test_2 = NB_Dataset_2[-NB_Dataset_Index_2,]
+
+#Final NB Model
+NB_Attrition_Model_2 = naiveBayes(NB_Dataset_Train_2[,c(3:10)],as.factor(NB_Dataset_Train_2$Attrition),laplace = 1)
+confusionMatrix(table(predict(NB_Attrition_Model_2,NB_Dataset_Test_2[,c(3:10)]),as.factor(NB_Dataset_Test_2$Attrition)))
+
+#Top three variables that lead to attrition JobInvolvement, MaritalStatus, OverTime
+model = train(Attrition~.,data = NB_Dataset,method = 'nb', trControl=trainControl(method='cv',number=10))
+x = varImp(model)
+Imp = rownames_to_column(as.data.frame(varImp(model)$importance))
+Imp %>% ggplot(aes(x = reorder(rowname, Yes), y = Yes)) +
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  ggtitle('Factors Influencing Employee Attrition') + 
+  ylab('% of Importance') +
+  xlab('')
+
+#Change factors to ordinal variables
+NB_Validation = Validation_Attrition
+#Overtime
+NB_Validation$OverTime <-       ifelse(grepl("*No*",NB_Validation$OverTime) , "0", "1")
+                          NB_Validation$OverTime = as.integer(NB_Validation$OverTime)
+
+#MaritalStatus
+NB_Validation$MaritalStatus <-  ifelse(grepl("*Divorced*", NB_Validation$MaritalStatus), "0", 
+                          ifelse(grepl("*Married*", NB_Validation$MaritalStatus) , "1", "2"))
+                          NB_Validation$MaritalStatus = as.integer(NB_Validation$MaritalStatus)
+
+NB_Validation$Attrition = predict(NB_Attrition_Model_2, newdata = NB_Validation)
+Case2PredictionsCLEVELAND_Attrition = NB_Validation %>% select(ID,Attrition)
+
+write.csv(Case2PredictionsCLEVELAND_Attrition, file = "C:/Users/cleve/OneDrive/Documents/R/R Files/SMU/Doing Data Science/Case_Study_2/Case2PredictionsCLEVELAND_Attrition.csv")
+
+```
+
+
+## Predict monthly income using regression model  
+You must provide a model that will attain a RMSE < $3000 for the training and the validation set.  
+  
+
+#### Transform and Visualize MLR Data  
+Create MLR Dataset with all variables from the training and test dataset
+```{r,message=FALSE}
+
+MLR_Train = Dataset_Train %>% select(ID,Att,Age,BusinessTravel,DailyRate,Department,DistanceFromHome,Education,EducationField,EnvironmentSatisfaction,Gender,HourlyRate,JobInvolvement,JobLevel,JobRole,JobSatisfaction,MaritalStatus,MonthlyIncome,MonthlyRate,NumCompaniesWorked,OverTime,PercentSalaryHike,PerformanceRating,RelationshipSatisfaction,StockOptionLevel,TotalWorkingYears,TrainingTimesLastYear,WorkLifeBalance,YearsAtCompany,YearsInCurrentRole,YearsSinceLastPromotion,YearsWithCurrManager)
+
+MLR_Test = Dataset_Test %>% select(ID,Att,Age,BusinessTravel,DailyRate,Department,DistanceFromHome,Education,EducationField,EnvironmentSatisfaction,Gender,HourlyRate,JobInvolvement,JobLevel,JobRole,JobSatisfaction,MaritalStatus,MonthlyIncome,MonthlyRate,NumCompaniesWorked,OverTime,PercentSalaryHike,PerformanceRating,RelationshipSatisfaction,StockOptionLevel,TotalWorkingYears,TrainingTimesLastYear,WorkLifeBalance,YearsAtCompany,YearsInCurrentRole,YearsSinceLastPromotion,YearsWithCurrManager)
+```
+
+##### First Pass MLR Model using all variables
+
+```{r,message=FALSE}
+# Fit Model with all variables from MLR_Train Dataset
+MLR_FitALL <- lm(formula = MonthlyIncome ~ . -ID,data=MLR_Train)
+summary(MLR_FitALL)
+
+#Calculate RMSE using MLR_FitALL model on Test Data
+MLR_Test$PredictMI_ALL = predict(MLR_FitALL, newdata = MLR_Test)
+rmse(MLR_Test$MonthlyIncome,MLR_Test$PredictMI_ALL)
+
+```
+
+#### Second and Third Pass MLR Models 
+
+```{r,message=FALSE, warning=FALSE}
+#MLR Correlation Plot
+corrplot(cor(MLR_Train), method = "ellipse")
+
+#MLR Correlation Table
+MLR_CorrMatrix <- rcorr(as.matrix(MLR_Train))
+MLR_CorrTable <- flat_cor_mat(round(MLR_CorrMatrix$r,4), round(MLR_CorrMatrix$P,5))
+MLR_CorrTable[MLR_CorrTable$column=='MonthlyIncome',]
+
+#Second Pass Model with variables correlation to monthly income
+MLR_FitTEST <- lm(formula = MonthlyIncome ~ Age + JobLevel + MaritalStatus + TotalWorkingYears,data=MLR_Test)
+summary(MLR_FitTEST)
+
+#Third Pass Model using backward elimination Variable Selection process
+t=step(MLR_FitALL,direction = "backward")
+
+MLR_FitBACKWARDS <- lm(formula = MonthlyIncome ~ YearsWithCurrManager + BusinessTravel + YearsAtCompany + DistanceFromHome + EnvironmentSatisfaction + JobRole +  TotalWorkingYears + Department + JobLevel, data = MLR_Test)
+summary(MLR_FitBACKWARDS)
+```
+
+#### Calculate RMSE with all models on the test data, select final model, visualize assumptions
+
+
+```{r,message=FALSE, warning=FALSE}
+#Calculate RMSE using MLR_FitALL model on Test Data
+MLR_Test$PredictMI_ALL = predict(MLR_FitALL, newdata = MLR_Test)
+rmse(MLR_Test$MonthlyIncome,MLR_Test$PredictMI_ALL)
+
+#Calculate RMSE using MLR_FitTEST model on Test Data
+MLR_Test$MLR_FitTEST = predict(MLR_FitTEST, newdata = MLR_Test)
+rmse(MLR_Test$MonthlyIncome,MLR_Test$MLR_FitTEST)
+
+#Calculate RMSE using MLR_FitBACKWARDS model on Test Data
+MLR_Test$MLR_FitBACKWARDS = predict(MLR_FitBACKWARDS, newdata = MLR_Test)
+rmse(MLR_Test$MonthlyIncome,MLR_Test$MLR_FitBACKWARDS)
+
+#Residual and Q-Q plot
+autoplot(MLR_FitBACKWARDS,1:2)
+
+#Plot MLR variables
+MLR_Train %>% select(MonthlyIncome,YearsWithCurrManager,BusinessTravel,YearsAtCompany,DistanceFromHome,EnvironmentSatisfaction,JobRole, TotalWorkingYears,Department,JobLevel) %>% ggpairs()
+
+```
+
+#### Run final model on validation dataset and write csv file
+
+```{r,message=FALSE}
+#### Change factor variables to ordinal variables for validation dataset
+MLR_Validation = Validation_Salary
+MLR_Validation = Validation_Salary %>% select(ID,YearsWithCurrManager,BusinessTravel,YearsAtCompany,DistanceFromHome,EnvironmentSatisfaction,JobRole, TotalWorkingYears,Department,JobLevel)
+
+#BusinessTravel                                              
+MLR_Validation$BusinessTravel <- ifelse(grepl("*Non-Travel*", MLR_Validation$BusinessTravel), "0", 
+                          ifelse(grepl("*Travel_Frequently*", MLR_Validation$BusinessTravel) , "1", "2"))
+                          MLR_Validation$BusinessTravel = as.integer(MLR_Validation$BusinessTravel)
+
+#Department
+MLR_Validation$Department <-     ifelse(grepl("*Human Resources*", MLR_Validation$Department ), "0", 
+                          ifelse(grepl("*Research & Development*", MLR_Validation$Department) , "1", "2"))
+                          MLR_Validation$Department = as.integer(MLR_Validation$Department )
+
+#JobRole
+MLR_Validation$JobRole <-        ifelse(grepl("*Healthcare Representative*", MLR_Validation$JobRole), "0", 
+                          ifelse(grepl("*Human Resources*", MLR_Validation$JobRole) , "1", 
+                          ifelse(grepl("*Laboratory Technician*", MLR_Validation$JobRole) , "2", 
+                          ifelse(grepl("*Manager*", MLR_Validation$JobRole) , "3", 
+                          ifelse(grepl("*Manufacturing Director*", MLR_Validation$JobRole) , "4", 
+                          ifelse(grepl("*Research Director*", MLR_Validation$JobRole) , "5", 
+                          ifelse(grepl("*Research Scientist*", MLR_Validation$JobRole) , "6", 
+                          ifelse(grepl("*Sales Executive*", MLR_Validation$JobRole) , "7", 
+                          "8"))))))))
+                          MLR_Validation$JobRole = as.integer(MLR_Validation$JobRole)
+
+MLR_Validation$MonthlyIncome = predict(MLR_FitBACKWARDS, newdata = MLR_Validation)
+Case2PredictionsCLEVELAND_Salary = MLR_Validation %>% select(ID,MonthlyIncome)
+
+write.csv(Case2PredictionsCLEVELAND_Salary, file = "C:/Users/cleve/OneDrive/Documents/R/R Files/SMU/Doing Data Science/Case_Study_2/Case2PredictionsCLEVELAND_Salary.csv")
+
+
+```
